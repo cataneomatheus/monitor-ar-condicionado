@@ -154,3 +154,119 @@ def buscar_zoom():
 
     return resultados
 
+
+# ==========================
+# AMAZON
+# ==========================
+
+def buscar_amazon():
+    query_encoded = QUERY.replace(" ", "+")
+    url = f"https://www.amazon.com.br/s?k={query_encoded}"
+
+    print("🔎 Buscando na Amazon...")
+
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        print("Erro Amazon:", e)
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    resultados = []
+
+    cards = soup.select("div.s-result-item")
+
+    for card in cards:
+        titulo_tag = card.select_one("h2 a span")
+        preco_tag = card.select_one(".a-price .a-offscreen")
+
+        if not titulo_tag or not preco_tag:
+            continue
+
+        titulo = titulo_tag.get_text(strip=True)
+        preco = parse_preco(preco_tag.get_text(strip=True))
+
+        if preco is None:
+            continue
+
+        href = card.select_one("h2 a")
+        if not href:
+            continue
+
+        link = "https://www.amazon.com.br" + href.get("href")
+
+        resultados.append(
+            {
+                "fonte": "Amazon",
+                "titulo": titulo,
+                "preco": preco,
+                "link": link,
+            }
+        )
+
+    return resultados
+
+
+# ==========================
+# WHATSAPP (Twilio)
+# ==========================
+
+def enviar_whatsapp(msg):
+    sid = os.getenv("TWILIO_ACCOUNT_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    w_from = os.getenv("TWILIO_WHATSAPP_FROM")
+    w_to = os.getenv("WHATSAPP_TO")
+
+    if not all([sid, token, w_from, w_to]):
+        print("⚠ Configuração do Twilio ausente.")
+        return
+
+    try:
+        client = Client(sid, token)
+        msg = client.messages.create(
+            from_=w_from,
+            to=w_to,
+            body=msg
+        )
+        print("📲 WhatsApp enviado:", msg.sid)
+    except Exception as e:
+        print("❌ Erro ao enviar WhatsApp:", e)
+
+
+# ==========================
+# MAIN
+# ==========================
+
+def main():
+    print("=== MONITOR INICIADO ===")
+
+    ofertas = []
+
+    ofertas.extend(buscar_buscape())
+    ofertas.extend(buscar_zoom())
+    ofertas.extend(buscar_amazon())
+
+    if not ofertas:
+        print("Nenhuma oferta encontrada.")
+        return
+
+    # ordenar pelo menor preço
+    ofertas.sort(key=lambda x: x["preco"])
+    ofertas = ofertas[:RESULTADOS_MAX]
+
+    msg = "🔥 Ofertas encontradas 🔥\n\n"
+    for o in ofertas:
+        msg += (
+            f"💰 R$ {o['preco']:.2f}\n"
+            f"{o['titulo']}\n"
+            f"🛒 {o['fonte']}\n"
+            f"🔗 {o['link']}\n\n"
+        )
+
+    print(msg)
+    enviar_whatsapp(msg)
+
+
+if __name__ == "__main__":
+    main()
