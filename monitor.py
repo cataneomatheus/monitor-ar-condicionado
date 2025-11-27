@@ -1,12 +1,13 @@
 import os
-import json
+import re
 import requests
 from bs4 import BeautifulSoup
 from decimal import Decimal
 from twilio.rest import Client
 
-QUERY = "ar condicionado 30000 btus"
-RESULTADOS_MAX = 15
+# ==========================
+# CONFIG
+# ==========================
 
 BUSCAPE_URL = (
     "https://www.buscape.com.br/search?"
@@ -16,59 +17,101 @@ BUSCAPE_URL = (
     "&sortBy=price_asc"
 )
 
+RESULTADOS_MAX = 15
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "pt-BR,pt;q=0.9",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
 }
 
 
+def parse_preco(text: str) -> Decimal | None:
+    """
+    Converte textos tipo:
+      'R$ 4.249,00'  -> Decimal('4249.00')
+      '4.249,00'     -> Decimal('4249.00')
+    """
+    if not text:
+        return None
+
+    # tira tudo que não for dígito, ponto ou vírgula
+    cleaned = re.sub(r"[^\d\.,]", "", text)
+
+    if not cleaned:
+        return None
+
+    # remove pontos de milhar (4.249,00 -> 4249,00)
+    cleaned = cleaned.replace(".", "")
+    # troca vírgula decimal por ponto (4249,00 -> 4249.00)
+    cleaned = cleaned.replace(",", ".")
+
+    try:
+        return Decimal(cleaned)
+    except Exception:
+        return None
+
+
+# ==========================
+# BUSCAPÉ SCRAPER
+# ==========================
+
 def buscar_buscape():
     print("🔎 Buscando no Buscapé...")
+    resultados = []
 
     try:
         resp = requests.get(BUSCAPE_URL, headers=HEADERS, timeout=25)
         resp.raise_for_status()
     except Exception as e:
-        print("❌ Erro ao carregar página:", e)
-        return []
+        print("❌ Erro ao buscar página do Buscapé:", e)
+        return resultados
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # pegar o JSON principal do Next.js
-    script_tag = soup.find("script", id="__NEXT_DATA__", type="application/json")
-    if not script_tag:
-        print("❌ JSON principal não encontrado!")
-        return []
+    # cada card de produto
+    cards = soup.select('[data-testid="product-card"]')
+    print(f"📦 Cards encontrados: {len(cards)}")
 
-    try:
-        data = json.loads(script_tag.string)
-    except Exception as e:
-        print("❌ Erro ao ler JSON:", e)
-        return []
+    cards_com_preco = 0
 
-    resultados = []
-
-    try:
-        # caminhos observados na estrutura oficial
-        products = (
-            data["props"]["pageProps"]["dehydratedState"]["queries"][0]
-            ["state"]["data"]["products"]
-        )
-    except Exception as e:
-        print("❌ Estrutura do JSON alterada:", e)
-        return []
-
-    for p in products:
-        try:
-            titulo = p["name"]
-            preco = Decimal(p["price"] / 100)  # price vem em centavos
-            link = "https://www.buscape.com.br" + p["link"]
-        except:
+    for card in cards:
+        # 1) preço usando o data-testid que você trouxe
+        preco_el = card.select_one('[data-testid="product-card::price"]')
+        if not preco_el:
             continue
+
+        preco_texto = preco_el.get_text(strip=True)
+        preco = parse_preco(preco_texto)
+        if preco is None:
+            continue
+
+        cards_com_preco += 1
+
+        # 2) título (quando tiver)
+        nome_el = card.select_one('[data-testid="product-card::name"]')
+        if nome_el:
+            titulo = nome_el.get_text(strip=True)
+        else:
+            # fallback: pega o começo do texto do card
+            titulo = card.get_text(" ", strip=True)[:120]
+
+        # 3) link – pega o primeiro <a href> dentro do card
+        link_el = card.select_one("a[href]")
+        if not link_el:
+            continue
+
+        href = link_el.get("href")
+        if not href:
+            continue
+
+        if href.startswith("/"):
+            link = "https://www.buscape.com.br" + href
+        else:
+            link = href
 
         resultados.append(
             {
@@ -79,30 +122,44 @@ def buscar_buscape():
             }
         )
 
-    print(f"📦 Encontrados {len(resultados)} produtos via JSON do Buscapé")
+    print(f"💰 Cards com preço válido: {cards_com_preco}")
+    print(f"✅ Ofertas montadas: {len(resultados)}")
+
     return resultados
 
 
-def enviar_whatsapp(msg):
+# ==========================
+# WHATSAPP (Twilio)
+# ==========================
+
+def enviar_whatsapp(msg: str):
     sid = os.getenv("TWILIO_ACCOUNT_SID")
     token = os.getenv("TWILIO_AUTH_TOKEN")
     w_from = os.getenv("TWILIO_WHATSAPP_FROM")
     w_to = os.getenv("WHATSAPP_TO")
 
+    if not all([sid, token, w_from, w_to]):
+        print("⚠ Variáveis de ambiente do Twilio não configuradas corretamente.")
+        return
+
     try:
         client = Client(sid, token)
-        message = client.messages.create(
+        m = client.messages.create(
             from_=w_from,
             to=w_to,
             body=msg
         )
-        print("📲 WhatsApp enviado:", message.sid)
+        print("📲 WhatsApp enviado:", m.sid)
     except Exception as e:
         print("❌ Erro ao enviar WhatsApp:", e)
 
 
+# ==========================
+# MAIN
+# ==========================
+
 def main():
-    print("=== MONITOR — BUSCAPÉ (JSON MODE) ===")
+    print("=== MONITOR — BUSCAPÉ (HTML) ===")
 
     ofertas = buscar_buscape()
 
@@ -110,10 +167,11 @@ def main():
         print("⚠ Nenhuma oferta encontrada.")
         return
 
+    # ordena pelo menor preço
     ofertas.sort(key=lambda x: x["preco"])
     ofertas = ofertas[:RESULTADOS_MAX]
 
-    msg = "🔥 *Ofertas Buscapé* 🔥\n\n"
+    msg = "🔥 *Ofertas Buscapé — ar condicionado 30.000 BTUs* 🔥\n\n"
     for o in ofertas:
         msg += (
             f"💰 *R$ {o['preco']:.2f}*\n"
