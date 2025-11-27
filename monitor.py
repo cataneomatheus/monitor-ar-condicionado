@@ -1,12 +1,9 @@
 import os
+import json
 import requests
 from bs4 import BeautifulSoup
 from decimal import Decimal
 from twilio.rest import Client
-
-# ==========================
-# CONFIG
-# ==========================
 
 QUERY = "ar condicionado 30000 btus"
 RESULTADOS_MAX = 15
@@ -23,78 +20,55 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
+        "Chrome/125.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9",
 }
 
 
-def parse_preco(text):
-    """Converte 'R$ 4.399,00' em Decimal('4399.00')"""
-    if not text:
-        return None
-    import re
-    numeros = re.sub(r"[^\d,]", "", text)
-    if not numeros:
-        return None
-    return Decimal(numeros) / 100
-
-
-# ==========================
-# SCRAPER DO BUSCAPÉ
-# ==========================
-
 def buscar_buscape():
     print("🔎 Buscando no Buscapé...")
-    resultados = []
 
     try:
         resp = requests.get(BUSCAPE_URL, headers=HEADERS, timeout=25)
         resp.raise_for_status()
     except Exception as e:
-        print("❌ Erro Buscapé:", e)
-        return resultados
+        print("❌ Erro ao carregar página:", e)
+        return []
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Primeiro, tente pegar estrutura com data-testid
-    cards = soup.select("[data-testid='product-card']")
+    # pegar o JSON principal do Next.js
+    script_tag = soup.find("script", id="__NEXT_DATA__", type="application/json")
+    if not script_tag:
+        print("❌ JSON principal não encontrado!")
+        return []
 
-    # Se não achar nada, tentar estrutura antiga
-    if not cards:
-        cards = soup.select("a[data-testid*='product-card']")
+    try:
+        data = json.loads(script_tag.string)
+    except Exception as e:
+        print("❌ Erro ao ler JSON:", e)
+        return []
 
-    # Fallback ainda mais agressivo
-    if not cards:
-        cards = soup.find_all("a")
+    resultados = []
 
-    print(f"📦 Cards encontrados: {len(cards)}")
+    try:
+        # caminhos observados na estrutura oficial
+        products = (
+            data["props"]["pageProps"]["dehydratedState"]["queries"][0]
+            ["state"]["data"]["products"]
+        )
+    except Exception as e:
+        print("❌ Estrutura do JSON alterada:", e)
+        return []
 
-    for card in cards:
-        texto = card.get_text(" ", strip=True)
-
-        # precisa ter preço
-        if "R$" not in texto:
+    for p in products:
+        try:
+            titulo = p["name"]
+            preco = Decimal(p["price"] / 100)  # price vem em centavos
+            link = "https://www.buscape.com.br" + p["link"]
+        except:
             continue
-
-        # pegar o primeiro preço que aparecer
-        preco_str = texto.split("R$")[1].split(" ")[0]
-        preco = parse_preco("R$" + preco_str)
-        if preco is None:
-            continue
-
-        # título
-        titulo = card.get("title") or texto[:120]
-
-        # link
-        href = card.get("href")
-        if not href:
-            continue
-
-        if href.startswith("/"):
-            link = "https://www.buscape.com.br" + href
-        else:
-            link = href
 
         resultados.append(
             {
@@ -105,12 +79,9 @@ def buscar_buscape():
             }
         )
 
+    print(f"📦 Encontrados {len(resultados)} produtos via JSON do Buscapé")
     return resultados
 
-
-# ==========================
-# WHATSAPP
-# ==========================
 
 def enviar_whatsapp(msg):
     sid = os.getenv("TWILIO_ACCOUNT_SID")
@@ -130,12 +101,8 @@ def enviar_whatsapp(msg):
         print("❌ Erro ao enviar WhatsApp:", e)
 
 
-# ==========================
-# MAIN
-# ==========================
-
 def main():
-    print("=== MONITOR — BUSCAPÉ ===")
+    print("=== MONITOR — BUSCAPÉ (JSON MODE) ===")
 
     ofertas = buscar_buscape()
 
