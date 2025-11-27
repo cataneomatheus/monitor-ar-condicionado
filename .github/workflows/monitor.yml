@@ -20,7 +20,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install requests twilio
+        pip install requests twilio beautifulsoup4
 
     - name: Run monitor
       env:
