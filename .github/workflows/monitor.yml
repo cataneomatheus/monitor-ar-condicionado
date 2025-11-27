@@ -1,0 +1,32 @@
+name: Monitor Ar Condicionado
+
+on:
+  schedule:
+    - cron: "*/90 * * * *"   # roda a cada 30 minutos
+  workflow_dispatch:         # permite rodar manualmente
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install dependencies
+      run: |
+        pip install requests twilio
+
+    - name: Run monitor
+      env:
+        TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+        TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+        TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
+        WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
+      run: |
+        python monitor.py
