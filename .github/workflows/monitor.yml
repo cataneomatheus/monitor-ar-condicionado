@@ -2,8 +2,8 @@ name: Monitor Ar Condicionado
 
 on:
   schedule:
-    - cron: "*/90 * * * *"   # roda a cada 30 minutos
-  workflow_dispatch:         # permite rodar manualmente
+    - cron: "*/90 * * * *"
+  workflow_dispatch:
 
 jobs:
   run-monitor:
@@ -22,11 +22,17 @@ jobs:
       run: |
         pip install requests twilio beautifulsoup4
 
+    - name: Debug – listar arquivos
+      run: |
+        echo "📂 Listando arquivos..."
+        ls -R .
+        echo "📄 Conteúdo do monitor.py:"
+        cat monitor.py || echo "❌ monitor.py NÃO encontrado!"
+
     - name: Run monitor
       env:
         TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
         TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
         TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
         WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
-      run: |
-        python monitor.py
+      run: python monitor.py
