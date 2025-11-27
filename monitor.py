@@ -4,20 +4,33 @@ from bs4 import BeautifulSoup
 from decimal import Decimal
 from twilio.rest import Client
 
+# ==========================
+# CONFIG
+# ==========================
+
 QUERY = "ar condicionado 30000 btus"
 RESULTADOS_MAX = 15
+
+BUSCAPE_URL = (
+    "https://www.buscape.com.br/search?"
+    "q=ar%20condicionado%2030000%20btus"
+    "&hitsPerPage=30"
+    "&page=1"
+    "&sortBy=price_asc"
+)
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36"
+        "Chrome/122.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
 }
 
 
 def parse_preco(text):
+    """Converte 'R$ 4.399,00' em Decimal('4399.00')"""
     if not text:
         return None
     import re
@@ -28,30 +41,71 @@ def parse_preco(text):
 
 
 # ==========================
-# BUSCAPÉ
+# SCRAPER DO BUSCAPÉ
 # ==========================
 
 def buscar_buscape():
-    print("🔎 Teste Buscapé...")
-    return []  # temporariamente vazio
+    print("🔎 Buscando no Buscapé...")
+    resultados = []
 
+    try:
+        resp = requests.get(BUSCAPE_URL, headers=HEADERS, timeout=25)
+        resp.raise_for_status()
+    except Exception as e:
+        print("❌ Erro Buscapé:", e)
+        return resultados
 
-# ==========================
-# ZOOM
-# ==========================
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-def buscar_zoom():
-    print("🔎 Teste Zoom...")
-    return []  # temporariamente vazio
+    # Primeiro, tente pegar estrutura com data-testid
+    cards = soup.select("[data-testid='product-card']")
 
+    # Se não achar nada, tentar estrutura antiga
+    if not cards:
+        cards = soup.select("a[data-testid*='product-card']")
 
-# ==========================
-# AMAZON
-# ==========================
+    # Fallback ainda mais agressivo
+    if not cards:
+        cards = soup.find_all("a")
 
-def buscar_amazon():
-    print("🔎 Teste Amazon...")
-    return []  # temporariamente vazio
+    print(f"📦 Cards encontrados: {len(cards)}")
+
+    for card in cards:
+        texto = card.get_text(" ", strip=True)
+
+        # precisa ter preço
+        if "R$" not in texto:
+            continue
+
+        # pegar o primeiro preço que aparecer
+        preco_str = texto.split("R$")[1].split(" ")[0]
+        preco = parse_preco("R$" + preco_str)
+        if preco is None:
+            continue
+
+        # título
+        titulo = card.get("title") or texto[:120]
+
+        # link
+        href = card.get("href")
+        if not href:
+            continue
+
+        if href.startswith("/"):
+            link = "https://www.buscape.com.br" + href
+        else:
+            link = href
+
+        resultados.append(
+            {
+                "fonte": "Buscapé",
+                "titulo": titulo,
+                "preco": preco,
+                "link": link,
+            }
+        )
+
+    return resultados
 
 
 # ==========================
@@ -63,8 +117,6 @@ def enviar_whatsapp(msg):
     token = os.getenv("TWILIO_AUTH_TOKEN")
     w_from = os.getenv("TWILIO_WHATSAPP_FROM")
     w_to = os.getenv("WHATSAPP_TO")
-
-    print("📨 Enviando WhatsApp...")
 
     try:
         client = Client(sid, token)
@@ -79,35 +131,26 @@ def enviar_whatsapp(msg):
 
 
 # ==========================
-# MAIN LOGIC
+# MAIN
 # ==========================
 
 def main():
-    print("=== MONITOR INICIADO ===")
+    print("=== MONITOR — BUSCAPÉ ===")
 
-    ofertas = []
+    ofertas = buscar_buscape()
 
-    ofertas.extend(buscar_buscape())
-    ofertas.extend(buscar_zoom())
-    ofertas.extend(buscar_amazon())
-
-    # INCLUIR UMA OFERTA FAKE PARA TESTE
-    ofertas.append({
-        "fonte": "TESTE",
-        "titulo": "Oferta Fake (Teste de Funcionamento)",
-        "preco": Decimal("123.45"),
-        "link": "https://exemplo.com"
-    })
+    if not ofertas:
+        print("⚠ Nenhuma oferta encontrada.")
+        return
 
     ofertas.sort(key=lambda x: x["preco"])
     ofertas = ofertas[:RESULTADOS_MAX]
 
-    msg = "🔥 TESTE DE OFERTAS 🔥\n\n"
+    msg = "🔥 *Ofertas Buscapé* 🔥\n\n"
     for o in ofertas:
         msg += (
-            f"💰 R$ {o['preco']:.2f}\n"
+            f"💰 *R$ {o['preco']:.2f}*\n"
             f"{o['titulo']}\n"
-            f"🛒 {o['fonte']}\n"
             f"🔗 {o['link']}\n\n"
         )
 
